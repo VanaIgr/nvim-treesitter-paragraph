@@ -64,46 +64,84 @@ function Wrapper:parseChild(node)
     end
 
     local nodeType = node:type()
+    local languageProperties = extra.languageProperties(extra.tree:lang())
 
-    if nodeType == 'comment' then
+    local textContent = languageProperties.textContent[nodeType]
+    if textContent then
         local nodeRange = { utils.fixedRange(node:range()) }
 
-        print('^')
+        local boundaryLinesParent = false
+        local properties = textContent[1]
+        if properties ~= nil then
+            boundaryLinesParent = properties.boundaryLinesParent == true
+        end
 
         local text = vim.treesitter.get_node_text(node, extra.source)
         local lines = vim.split(text, "\n") -- pray to all gods that treesitter thinks the same of lines
-        -- why not return array of lines like nvim_buf_get_text ?
+        local parent = Wrapper:new{ _id = extra.idObj:createId(), _parent = self, _extra = extra, _children = {}, _range = nodeRange }
         if #lines ~= nodeRange[3] - nodeRange[1] + 1 then
             assert(
                 false,
-                "calculated line count = "..#lines.." inside node type `" .. nodeType 
-                .. "` must be consistent with treesitter range (" .. nodeRange[1]..', '..nodeRange[2]..', '
+                "calculated line count = "..#lines.." for node of type `"..nodeType
+                .."` must be consistent with treesitter range (" .. nodeRange[1]..', '..nodeRange[2]..', '
                 ..nodeRange[3]..', '..nodeRange[4]..') line count = '.. (nodeRange[3] - nodeRange[1] + 1)
             )
         end -- if assert just took error message as function
 
-        local parent = Wrapper:new{ _id = extra.idObj:createId(), _parent = self, _extra = extra, _children = {}, _range = nodeRange }
+        local firstNode, lastNode
 
-        local lastNode
-        for i, line in ipairs(lines) do
-            local first = line:find('%S')
-            local last  = line:reverse():find('%S')
-            if first ~= nil and last ~= nil then
-                last = #line - last + 1
-                local node = Wrapper:new{ _id = extra.idObj:createId(), _parent = parent, _extra = extra, _children = {} }
-                node._range = { nodeRange[1] + i-1, first, nodeRange[1] + i-1, last }
-                if lastNode == nil then node._isParentPart = true end
-                lastNode = node
+        local function textToNodes(startL, startC, endL, endC)
+            local origRange = { startL, startC, endL, endC }
+            startL = startL - nodeRange[1]
+            endL = endL - nodeRange[1]
+            if startL == 0 then
+                startC = startC - nodeRange[2]
+                if endL == startC then endC = endC - nodeRange[2] end
+            end
+
+            local curLines = {}
+            for i=startL,endL do
+                table.insert(curLines, lines[i+1])
+            end
+            curLines[#curLines] = curLines[#curLines]:sub(1, endC+1)
+            curLines[1] = curLines[1]:sub(startC+1)
+
+            for i, line in ipairs(curLines) do
+                local first = line:find('%S')
+                local last  = line:reverse():find('%S') -- findlast
+                if first ~= nil and last ~= nil then
+                    last = #line - last + 1
+                    local node = Wrapper:new{ _id = extra.idObj:createId(), _parent = parent, _extra = extra, _children = {} }
+                    node._range = { origRange[1] + i - 1, first - 1, origRange[1] + i - 1, last - 1 }
+                    lastNode = node
+                end
             end
         end
 
-        if lastNode ~= nil then lastNode._isParentPart = true end -- make first and last line be defining for the comment
-        -- would be better if treesitter split the actual comment symbols into anonimous nodes
+        local prevLine = nodeRange[1]
+        local prevCol  = nodeRange[2]
+
+        for child in node:iter_children() do
+            if not textContent[child:type()] then
+                local childSL, childSC, childEL, childEC = utils.fixedRange(child:range())
+                textToNodes(prevLine, prevCol, childSL, childSC-1)
+                parent:parseChild(child)
+                lastNode = child
+                prevLine = childEL
+                prevCol = childEC + 1
+            end
+        end
+        textToNodes(prevLine, prevCol, nodeRange[3], nodeRange[4])
+
+        if boundaryLinesParent and #parent._children ~= 0 then
+            parent._children[1]._isParentPart = true
+            parent._children[#parent._children]._isParentPart = true
+        end
 
         return
     end
 
-    local splitNodes = extra.languageProperties(extra.tree:lang()).splitNodes[nodeType]
+    local splitNodes = languageProperties.splitNodes[nodeType]
     if splitNodes then
         local nodesToUpdate = {}
 
@@ -155,7 +193,7 @@ function Wrapper:childrenIter()
         return children[i]
     end end
 end
-function Wrapper:range() return self._range end
+function Wrapper:range() return utils.updateTable({}, self._range) end
 function Wrapper:parent() return self._parent end
 function Wrapper:parentPart() return self._isParentPart == true end
 function Wrapper:prev()

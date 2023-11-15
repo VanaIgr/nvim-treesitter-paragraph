@@ -58,12 +58,14 @@ function M.normalizeRange(range)
     return range
 end
 
-function M.countEmptyBelow(startLine)
+function M.countEmptyBelow(startLine, buf)
+    if buf == nil then buf = 0 end
     local count = 0
+    local last = vim.api.nvim_buf_line_count(buf)
     while true do
         local lineI = startLine + count + 1
-        local ok, res = pcall(vim.api.nvim_buf_get_lines, 0, lineI-1, lineI-1 + 1, true)
-        if ok and res[1]:gsub("%s", "") == "" then
+        if lineI >= 0 and lineI < last
+            and vim.api.nvim_buf_get_lines(buf, lineI, lineI + 1, true)[1]:gsub('%s', '') == '' then
             count = count + 1
         else
             return count
@@ -71,12 +73,14 @@ function M.countEmptyBelow(startLine)
     end
 end
 
-function M.countEmptyAbove(startLine)
+function M.countEmptyAbove(startLine, buf)
+    if buf == nil then buf = 0 end
     local count = 0
+    local last = vim.api.nvim_buf_line_count(buf)
     while true do
         local lineI = startLine - count - 1
-        local ok, res = pcall(vim.api.nvim_buf_get_lines, 0, lineI-1, lineI-1 + 1, true)
-        if ok and res[1]:gsub("%s", "") == "" then
+        if lineI >= 0 and lineI < last
+            and vim.api.nvim_buf_get_lines(buf, lineI, lineI + 1, true)[1]:gsub('%s', '') == '' then
             count = count + 1
         else
             return count
