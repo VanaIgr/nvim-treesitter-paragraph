@@ -88,14 +88,14 @@ function M.countEmptyAbove(startLine, buf)
     end
 end
 
-function M.filterInside(data)
+function M.filterInside(data, getRange)
     local res = {}
     if #data == 0 then return res end
 
     table.insert(res, data[1])
-    local prevRange = data[1].range
+    local prevRange = getRange(data[1])
     for i=2, #data do
-        local curRange = data[i].range
+        local curRange = getRange(data[i])
         if not M.isRangeInside(curRange, prevRange) then
             table.insert(res, data[i])
             prevRange = curRange
@@ -108,6 +108,10 @@ end
 function M.getRootNode(buf)
     local root = vim.treesitter.get_parser(buf)
     return root:parse()[1]:root() -- ????
+end
+
+function M.assert2(cond, errMsg)
+    if true or not cond then assert(cond, errMsg()) end
 end
 
 return M

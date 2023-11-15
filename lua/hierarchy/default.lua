@@ -79,16 +79,11 @@ function Wrapper:parseChild(node)
         local text = vim.treesitter.get_node_text(node, extra.source)
         local lines = vim.split(text, "\n") -- pray to all gods that treesitter thinks the same of lines
         local parent = Wrapper:new{ _id = extra.idObj:createId(), _parent = self, _extra = extra, _children = {}, _range = nodeRange }
-        if #lines ~= nodeRange[3] - nodeRange[1] + 1 then
-            assert(
-                false,
-                "calculated line count = "..#lines.." for node of type `"..nodeType
-                .."` must be consistent with treesitter range (" .. nodeRange[1]..', '..nodeRange[2]..', '
-                ..nodeRange[3]..', '..nodeRange[4]..') line count = '.. (nodeRange[3] - nodeRange[1] + 1)
-            )
-        end -- if assert just took error message as function
-
-        local firstNode, lastNode
+        utils.assert2(#lines == nodeRange[3] - nodeRange[1] + 1, function() return
+            "calculated line count = "..#lines.." for node of type `"..nodeType
+            .."` must be consistent with treesitter range (" .. nodeRange[1]..', '..nodeRange[2]..', '
+            ..nodeRange[3]..', '..nodeRange[4]..') line count = '.. (nodeRange[3] - nodeRange[1] + 1)
+        end)
 
         local function textToNodes(startL, startC, endL, endC)
             local origRange = { startL, startC, endL, endC }
@@ -103,6 +98,7 @@ function Wrapper:parseChild(node)
             for i=startL,endL do
                 table.insert(curLines, lines[i+1])
             end
+            utils.assert2(#curLines ~= 0, function() return 'incorrect range '..vim.inspect(origRange)..' for text node '..nodeType..' at '..vim.inspect(nodeRange) end)
             curLines[#curLines] = curLines[#curLines]:sub(1, endC+1)
             curLines[1] = curLines[1]:sub(startC+1)
 
@@ -113,7 +109,6 @@ function Wrapper:parseChild(node)
                     last = #line - last + 1
                     local node = Wrapper:new{ _id = extra.idObj:createId(), _parent = parent, _extra = extra, _children = {} }
                     node._range = { origRange[1] + i - 1, first - 1, origRange[1] + i - 1, last - 1 }
-                    lastNode = node
                 end
             end
         end
@@ -126,7 +121,6 @@ function Wrapper:parseChild(node)
                 local childSL, childSC, childEL, childEC = utils.fixedRange(child:range())
                 textToNodes(prevLine, prevCol, childSL, childSC-1)
                 parent:parseChild(child)
-                lastNode = child
                 prevLine = childEL
                 prevCol = childEC + 1
             end
