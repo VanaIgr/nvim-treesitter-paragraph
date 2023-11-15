@@ -64,7 +64,7 @@ local function updateRange(curNode, getSibling, diffLines, expandRange, confirmR
         if nbNode == nil then
             local expand = canExpandParent(curNode, getSibling, diffLines)
             if not reachedParent and expand then confirmRange() end
-            return true, true
+            return true
         end
         curNode = nbNode
 
@@ -73,15 +73,7 @@ local function updateRange(curNode, getSibling, diffLines, expandRange, confirmR
 
         if not reachedParent and diff > 0 then confirmRange() end
         if curNode:parentPart() then reachedParent = true end
-        if diff > 1 then
-            while not reachedParent do -- still return isLastSelectable = true if there are parent parts on the neighbour node line
-                nbNode = getSibling(nbNode)
-                if nbNode == nil then reachedParent = true; break end
-                if diffLines(nbNode:range(), curNodeRange) > 0 then break end
-                reachedParent = nbNode:parentPart()
-            end
-            return false, reachedParent
-        end
+        if diff > 1 then return false end
 
         expandRange(curNode)
     end
@@ -186,34 +178,35 @@ local function findParagraphBounds(root, inputRange)
 
         for _, data in pairs(parentsData) do -- expand selection
             local confirmedNodes = data.confirmedNodes
+            local newConfirmedNodes = { data.confirmedNodes[1], data.confirmedNodes[2] }
             local expNodes = data.expNodes
 
-            local expandBeforeParent, first = updateRange(
+            local expandBeforeParent = updateRange(
                 data.startNodes[1],
                 function(node) return node:prev() end,
                 function(nodeRange, otherRange) if otherRange == nil then otherRange = expNodes[1]:range() end; return otherRange[1] - nodeRange[3] end,
                 function(node) expNodes[1] = node end,
-                function() confirmedNodes[1] = expNodes[1] end
+                function() newConfirmedNodes[1] = expNodes[1] end
             )
 
-            local expandAfterParent, last = updateRange(
+            local expandAfterParent = updateRange(
                 data.startNodes[2],
                 function(node) return node:next() end,
                 function(nodeRange, otherRange) if otherRange == nil then otherRange = expNodes[2]:range() end; return nodeRange[1] - otherRange[3] end,
                 function(node) expNodes[2] = node end,
-                function() confirmedNodes[2] = expNodes[2] end
+                function() newConfirmedNodes[2] = expNodes[2] end
             )
 
             local parent = data.startNodes[1]:parent()
             if expandBeforeParent and expandAfterParent and parent ~= nil then
-                local index = getPointInsertIndex(confirmedNodes[1]:range(), nextParentData, function(item) return item.confirmedNodes[1]:range() end)
+                local index = getPointInsertIndex(newConfirmedNodes[1]:range(), nextParentData, function(item) return item.confirmedNodes[1]:range() end)
                 table.insert(nextParentData, index, {
-                    confirmedNodes = confirmedNodes, expNodes = expNodes,
+                    confirmedNodes = newConfirmedNodes, expNodes = expNodes,
                     startNodes = { parent, parent }
                 })
             else
-                local index = getPointInsertIndex(confirmedNodes[1]:range(), totalRanges, function(it) return it.range end)
-                table.insert(totalRanges, index, { { confirmedNodes[1], first }, { confirmedNodes[2], last } })
+                local index = getPointInsertIndex(confirmedNodes[1]:range(), totalRanges, function(it) return it[1]:range() end)
+                table.insert(totalRanges, index, confirmedNodes)
             end
         end
 
@@ -229,7 +222,7 @@ local function findParagraphBounds(root, inputRange)
     local totalRange = utils.emptyRange()
     local startData, endData
     for _, rangeData in pairs(totalRanges) do
-        local range = getTwoNodesRange({ rangeData[1][1], rangeData[2][1] })
+        local range = getTwoNodesRange(rangeData)
         if range[1] < totalRange[1] or (range[1] == totalRange[1] and range[2] <= totalRange[2]) then
             totalRange[1] = range[1]
             totalRange[2] = range[2]
@@ -244,9 +237,10 @@ local function findParagraphBounds(root, inputRange)
 
     -- calculate return value
 
-    local startEmptyLines, endEmptyLines
+    local startEmptyLines, startReachedParent
+    local endEmptyLines  , endReachedParent
 
-    local startNode = startData[1]
+    local startNode = startData
     local startNodeRange = startNode:range()
     local prevNode = startNode:prev()
     if prevNode == nil then _, prevNode = canExpandParent(
@@ -257,7 +251,7 @@ local function findParagraphBounds(root, inputRange)
     if prevNode ~= nil then startEmptyLines = startNodeRange[1] - prevNode:range()[3] - 1
     else startEmptyLines = startNodeRange[1] - rootRange[1] end
 
-    local endNode = endData[1]
+    local endNode = endData
     local endNodeRange = endNode:range()
     local nextNode = endNode:next()
     if nextNode == nil then _, nextNode = canExpandParent(
@@ -271,6 +265,25 @@ local function findParagraphBounds(root, inputRange)
     startEmptyLines = math.max(0, startEmptyLines)
     endEmptyLines  = math.max(0, endEmptyLines )
 
+    local function calcReachedParent(node, getSibling, diffLines)
+        local startRange = node:range()
+        while true do
+            node = getSibling(node)
+            if node == nil then return true end
+            if diffLines(node:range()) > 0 then return false end
+            if node:parentPart() then return true end
+        end
+    end
+    startReachedParent = calcReachedParent(
+        startNode,
+        function(node) return node:prev() end,
+        function(nodeRange) return startNodeRange[1] - nodeRange[3] end
+    )
+    endReachedParent = calcReachedParent(
+        endNode,
+        function(node) return node:next() end,
+        function(nodeRange) return nodeRange[1] - endNodeRange[3] end
+    )
 
     local function parRange(node)
         if node == nil then return rootRange end
@@ -284,8 +297,8 @@ local function findParagraphBounds(root, inputRange)
     return {
         range = { startNodeRange[1], startNodeRange[2], endNodeRange[3], endNodeRange[4] },
         ends = {
-            { emptyLines = startEmptyLines, reachedParent = startData[2], smaler = utils.isRangeInside(prevPrarentRange, nextPrarentRange) },
-            { emptyLines = endEmptyLines  , reachedParent = endData[2]  , smaler = utils.isRangeInside(nextPrarentRange, prevPrarentRange) },
+            { emptyLines = startEmptyLines, reachedParent = startReachedParent, smaler = utils.isRangeInside(prevPrarentRange, nextPrarentRange) },
+            { emptyLines = endEmptyLines  , reachedParent = endReachedParent  , smaler = utils.isRangeInside(nextPrarentRange, prevPrarentRange) },
         }
     }
 end
