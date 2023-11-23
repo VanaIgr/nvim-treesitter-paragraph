@@ -119,8 +119,8 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
         if parent == nil then return {
             range = nodeRange,
             ends = {
-                { emptyLines = nodeRange[1] - rootRange[1], reachedParent = true, smaler = true },
-                { emptyLines = rootRange[3] - nodeRange[1], reachedParent = true, smaler = true },
+                { reachedParent = true, smaler = true },
+                { reachedParent = true, smaler = true },
             },
         } end -- if root node is already selected
         local parentId = nodesInfo.id(parent)
@@ -246,8 +246,8 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
 
     -- calculate return value
 
-    local startEmptyLines, startReachedParent
-    local endEmptyLines  , endReachedParent
+    local prevPosition, startReachedParent
+    local nextPosition, endReachedParent
 
     local startNode = startData
     local startNodeRange = nodesInfo.range(startNode)
@@ -256,8 +256,10 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
         function(node) return nodesInfo.prev(node) end,
         function(nodeRange, otherRange) return otherRange[1] - nodeRange[3] end
     )
-    if prevNode ~= nil then startEmptyLines = startNodeRange[1] - nodesInfo.range(prevNode)[3] - 1
-    else startEmptyLines = startNodeRange[1] - rootRange[1] end
+    if prevNode then
+        local range = nodesInfo.range(prevNode)
+        prevPosition = { range[3], range[4] }
+    end
 
     local endNode = endData
     local endNodeRange = nodesInfo.range(endNode)
@@ -266,11 +268,10 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
         function(node) return nodesInfo.next(node) end,
         function(nodeRange) return nodeRange[1] - endNodeRange[3] end
     )
-    if nextNode ~= nil then endEmptyLines = nodesInfo.range(nextNode)[1] - endNodeRange[3] - 1
-    else endEmptyLines = rootRange[3] - endNodeRange[3] end
-
-    startEmptyLines = math.max(0, startEmptyLines)
-    endEmptyLines  = math.max(0, endEmptyLines )
+    if nextNode then
+        local range = nodesInfo.range(nextNode)
+        nextPosition = { range[1], range[2] }
+    end
 
     local function calcReachedParent(node, getSibling, diffLines)
         while true do
@@ -303,8 +304,8 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
     return {
         range = { startNodeRange[1], startNodeRange[2], endNodeRange[3], endNodeRange[4] },
         ends = {
-            { emptyLines = startEmptyLines, reachedParent = startReachedParent, smaler = utils.isRangeInside(prevPrarentRange, nextPrarentRange) },
-            { emptyLines = endEmptyLines  , reachedParent = endReachedParent  , smaler = utils.isRangeInside(nextPrarentRange, prevPrarentRange) },
+            { neighbour = prevPosition, reachedParent = startReachedParent, smaler = utils.isRangeInside(prevPrarentRange, nextPrarentRange) },
+            { neighbour = nextPosition, reachedParent = endReachedParent  , smaler = utils.isRangeInside(nextPrarentRange, prevPrarentRange) },
         }
     }
 end
@@ -321,7 +322,7 @@ local m = require('mapping')
 
 
 
-local properties = { -- TODO: add self
+local properties = {
     parseNode = function(self, context, treesNode)
         --if true then return false end
         local hierarchy = require('hierarchy.default')
@@ -385,6 +386,7 @@ local properties = { -- TODO: add self
     end
 }
 
+local ns = vim.api.nvim_create_namespace('')
 local hierarchy = require('hierarchy.default')
 
 m.n('yip', function()
@@ -418,11 +420,7 @@ m.n('dip', function()
     local parser = vim.treesitter.get_parser(bufId)
 
     local a = require('hierarchy.default')
-    local root = a.createRoot(
-        bufId,
-        parser,
-        properties
-    )
+    local root = a.createRoot(bufId, parser, properties)
 
     local paragraphData = findParagraphBounds(hierarchy.nodesInfo, root, getCursorRange())
     if paragraphData == nil then return end
@@ -432,49 +430,39 @@ m.n('dip', function()
     print(vim.inspect(paragraphData))
 
     local emptyAbove, emptyBelow
+    if ends[1].neighbour then emptyAbove = totalRange[1] - ends[1].neighbour[1] - 1
+    else emptyAbove = totalRange[1] end
+    if ends[2].neighbour then emptyBelow = ends[2].neighbour[1] - totalRange[3] - 1
+    else emptyBelow = vim.api.nvim_buf_line_count(bufId) - totalRange[3] - 1 end
 
-    if not ends[1].smaler and not ends[2].smaler then
-        if ends[1].emptyLines > ends[2].emptyLines then
-            emptyAbove = 0
-            emptyBelow = ends[2].emptyLines
-        else
-            emptyAbove = ends[1].emptyLines
-            emptyBelow = 0
-        end
-    elseif ends[1].smaler and ends[2].smaler then
+    local delCount = 0
+
+    if ends[1].smaler and ends[2].smaler then
         if ends[1].reachedParent or ends[2].reachedParent then
-            emptyAbove = ends[1].emptyLines
-            emptyBelow = ends[2].emptyLines
-        elseif ends[1].emptyLines > ends[2].emptyLines then
-            emptyAbove = 0
-            emptyBelow = ends[2].emptyLines
+            delCount = emptyAbove + emptyBelow
         else
-            emptyAbove = ends[1].emptyLines
-            emptyBelow = 0
+            delCount = math.min(emptyAbove, emptyBelow)
         end
+    elseif not ends[1].smaler and not ends[2].smaler then
+        delCount = math.min(emptyAbove, emptyBelow)
     else
-        if ends[2].smaler then
-            emptyAbove = 0
-            emptyBelow = ends[2].emptyLines
-        else
-            emptyAbove = ends[1].emptyLines
-            emptyBelow = 0
-        end
+        if ends[2].smaler then delCount = emptyBelow
+        else delCount = emptyAbove end
     end
 
-    local cursorPos = vim.api.nvim_win_get_cursor(0)
-    local cursorEndPos = totalRange[3] + emptyBelow + 1
-
-    vim.api.nvim_buf_set_lines(0, totalRange[1] - emptyAbove, totalRange[1], true, {})
-    totalRange[1] = totalRange[1] - emptyAbove
-    totalRange[3] = totalRange[3] - emptyAbove
-    cursorEndPos = cursorEndPos - emptyAbove
-    vim.api.nvim_buf_set_lines(0, totalRange[3] + 1, totalRange[3] + emptyBelow + 1, true, {})
-    cursorEndPos = cursorEndPos - emptyBelow
+    local cursorPosMark = vim.api.nvim_buf_set_extmark(
+        bufId, ns, ends[2].neighbour[1], ends[2].neighbour[2], {}
+    )
 
     local register = vim.api.nvim_get_vvar( 'register')
     vim.cmd('keepjumps '..(totalRange[1]+1)..','..(totalRange[3]+1)..'delete '..register)
-    cursorEndPos = cursorEndPos - (totalRange[3] - totalRange[1] + 1)
-    local last = vim.api.nvim_buf_line_count(0) - 1
-    vim.api.nvim_win_set_cursor(0, { math.max(0, math.min(cursorEndPos, last)) + 1, cursorPos[2] })
+
+    if delCount > 0 then
+        local startLine =  ends[1].neighbour[1] + 1
+        vim.api.nvim_buf_set_lines(0, startLine, startLine + delCount, true, {})
+    end
+
+    local cursorPos = vim.api.nvim_buf_get_extmark_by_id(bufId, ns, cursorPosMark, {})
+    vim.api.nvim_buf_del_extmark(bufId, ns, cursorPosMark)
+    vim.api.nvim_win_set_cursor(0, { cursorPos[1] + 1, cursorPos[2] })
 end)
