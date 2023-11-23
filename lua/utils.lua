@@ -2,6 +2,10 @@ local destr = table.unpack or unpack
 
 local M = {}
 
+function M.isRangeEmpty(range)
+    return range[1] > range[3] or (range[1] == range[3] and range[2] > range[4])
+end
+
 function M.updateTable(dst, src)
     for k, v in pairs(src) do dst[k] = v end
     return dst
@@ -111,7 +115,7 @@ function M.getRootNode(buf)
 end
 
 function M.assert2(cond, errMsg)
-    if true or not cond then assert(cond, errMsg()) end
+    if not cond then assert(cond, errMsg()) end
 end
 
 return M
