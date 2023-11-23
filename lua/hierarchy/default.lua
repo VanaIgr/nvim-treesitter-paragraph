@@ -47,13 +47,6 @@ static = { properties, idGen, source }
 type = [typeId, info...]
 ]]
 
---[[
-['argument_list'] = { ',' },
-['parameter_list'] = { ',' },
-['initializer_list'] = { ',' },
-['translation_unit'] = { ';' },
-]]
-
 local IdGenerator = {}
 IdGenerator.__index = IdGenerator
 setmetatable(IdGenerator, IdGenerator)

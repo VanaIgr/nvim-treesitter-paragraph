@@ -329,6 +329,12 @@ local properties = {
 
         local nodeType = hierarchy.treesType(treesNode, context.langTree)
 
+        if nodeType.name == ',' or nodeType.name == ';' then
+            local node = hierarchy.createNode(treesNode, context.langTree, context.static)
+            node.info.isParentPart = false
+            return node
+        end
+
         if nodeType.lang == 'lua' then
             if nodeType.name == 'else_statement' or nodeType.name == 'elseif_statement' then
                 for child in treesNode:iter_children() do
