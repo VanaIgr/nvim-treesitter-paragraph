@@ -13,7 +13,7 @@ M.typeId = typeId
 
 local nodesInfo = {}
 M.nodesInfo = nodesInfo
-function nodesInfo.childrenIter(node)
+function nodesInfo:childrenIter(node)
     local children = node.hierarchy.children
     local count = #children
     local i = 0
@@ -22,15 +22,15 @@ function nodesInfo.childrenIter(node)
         return children[i]
     end end
 end
-function nodesInfo.id(node)
+function nodesInfo:id(node)
     if node.id == nil then M.nodeSetId(node) end
     return node.id
 end
-function nodesInfo.range(node) return utils.updateTable({}, node.info.range) end
-function nodesInfo.parentPart(node) return node.info.isParentPart == true end
-function nodesInfo.parent(node) return node.hierarchy.parent end
-function nodesInfo.prev(node) return node.hierarchy.prev end
-function nodesInfo.next(node) return node.hierarchy.next end
+function nodesInfo:range(node) return utils.updateTable({}, node.info.range) end
+function nodesInfo:parentPart(node) return node.info.isParentPart == true end
+function nodesInfo:parent(node) return node.hierarchy.parent end
+function nodesInfo:prev(node) return node.hierarchy.prev end
+function nodesInfo:next(node) return node.hierarchy.next end
 
 --[[
 
@@ -141,6 +141,7 @@ function M.parseSplitNode(treesNode, nodeType, params, context)
             break
         else
             table.insert(startNode.hierarchy.children, children[i])
+            if type(params.setup) == 'function' then params:setup(children[i], false) end
         end
     end
 
@@ -154,6 +155,7 @@ function M.parseSplitNode(treesNode, nodeType, params, context)
     end
 
     for i=childI, #children do
+        if type(params.setup) == 'function' then params:setup(children[i], true) end
         table.insert(context.siblings, children[i])
     end
 end
@@ -238,7 +240,6 @@ function M.parseTextNode(treeNode, nodeType, textProperties, context)
             local childSL, childSC, childEL, childEC = utils.fixedRange(child:range())
             textToNodes(prevLine, prevCol, childSL, childSC-1)
             M.parseChild(context, child)
-            local i = children[#children].info
             prevLine = childEL
             prevCol = childEC + 1
         end
