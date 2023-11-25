@@ -288,14 +288,39 @@ local properties = {
 
         if nodeType.name == ',' or nodeType.name == ';' then
             local node = hierarchy.createNode(treesNode, context.langTree, context.static)
+            table.insert(context.siblings, node)
             node.info.isParentPart = false
-            return node
+            return true
+        end
+
+        if nodeType.lang == 'cpp' then
+            if nodeType.name == 'expression_statement' then
+                hierarchy.parseSplitNode(treesNode, nodeType, {
+                    splitAt = function(_, node)
+                        local type = node.type
+                        print(type.name)
+                        if type.name == ';' then return true end
+                    end
+                }, context)
+                return true
+            end
         end
 
         if nodeType.lang == 'lua' then
             if nodeType.name == 'else_statement' or nodeType.name == 'elseif_statement' then
                 for child in treesNode:iter_children() do
                     hierarchy.parseChild(context, child)
+                end
+                return true
+            end
+
+            if nodeType.name == 'function_declaration' then
+                local node = hierarchy.createNode(treesNode, context.langTree, context.static)
+                table.insert(context.siblings, node)
+                for _, child in pairs(node.hierarchy.children) do
+                    if child.type.name ~= 'body' then -- TODO: sanity check: assert same language
+                        child.info.isParentPart = true
+                    end
                 end
                 return true
             end
@@ -312,13 +337,13 @@ local properties = {
             ['string_fragment'] = {
                 isText = function(node, context)
                     local  type = hierarchy.treesType(node, context.langTree)
-                    if type.name == 'string' then return true end -- lua only
+                    if type.name == 'string' then return true end
                 end
             },
             ['string_literal'] = {
                 isText = function(node, context)
                     local  type = hierarchy.treesType(node, context.langTree)
-                    if type.name == 'string_content' then return true end -- lua only
+                    if type.name == 'string_content' then return true end
                 end
             },
             ['template_string'] = {},
