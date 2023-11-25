@@ -31,6 +31,10 @@ function M.isRangeInside(inner, outer)
         and (inner[3] < outer[3] or (inner[3] == outer[3] and inner[4] <= outer[4]))
 end
 
+function M.isPointBefore(pointL, pointC, otherL, otherC)
+    return pointL < otherL or (pointL == otherL and pointC < otherC)
+end
+
 function M.addRange(dst, src)
     if dst[1] > src[1] then
         dst[1] = src[1]

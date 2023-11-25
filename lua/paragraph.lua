@@ -38,10 +38,10 @@ local function getPointInsertIndex(insertPoint, data, getPoint)
         if insertPoint[1] == curPoint[1] and insertPoint[2] == curPoint[2] then
             b = m + 1
             break
-        elseif insertPoint[1] > curPoint[1] or (insertPoint[1] == curPoint[1] and insertPoint[2] > curPoint[2]) then
-            b = m + 1
-        else
+        elseif utils.isPointBefore(curPoint[1], curPoint[2], insertPoint[1], insertPoint[2]) then
             e = m
+        else
+            b = m + 1
         end
     end
 
@@ -126,10 +126,10 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
         else
 
             local combinedRange = getTwoNodesRange(nodesInfo, parentData.startNodes)
-            if nodeRange[1] < nodeRange[1] or (nodeRange[1] == combinedRange[1] and nodeRange[2] < combinedRange[2]) then
+            if utils.isPointBefore(nodeRange[1], nodeRange[2], combinedRange[1], combinedRange[2]) then
                 parentData.startNodes[1] = node
             end
-            if nodeRange[3] > combinedRange[3] or (nodeRange[3] == combinedRange[3] and nodeRange[4] > combinedRange[4]) then
+            if utils.isPointBefore(combinedRange[3], combinedRange[4], nodeRange[3], nodeRange[4]) then
                 parentData.startNodes[2] = node
             end
 
@@ -206,12 +206,12 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
     local startData, endData
     for _, rangeData in pairs(totalRanges) do
         local range = getTwoNodesRange(nodesInfo, rangeData)
-        if range[1] < totalRange[1] or (range[1] == totalRange[1] and range[2] <= totalRange[2]) then
+        if utils.isPointBefore(range[1], range[2], totalRange[1], totalRange[2]) then
             totalRange[1] = range[1]
             totalRange[2] = range[2]
             startData = rangeData[1]
         end
-        if range[3] > totalRange[3] or (range[3] == totalRange[3] and range[4] >= totalRange[4]) then
+        if utils.isPointBefore(totalRange[3], totalRange[4], range[3], range[4]) then
             totalRange[3] = range[3]
             totalRange[4] = range[4]
             endData = rangeData[2]
