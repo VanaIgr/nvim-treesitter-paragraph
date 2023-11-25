@@ -214,7 +214,12 @@ function M.parseTextNode(treeNode, nodeType, textProperties, context)
                 table.insert(children, {
                     type = { typeId.text },
                     info = {
-                        range = { origRange[1] + i - 1, first - 1, origRange[1] + i - 1, last - 1 },
+                        range = {
+                            origRange[1] + i-1,
+                            origRange[2] + first-1,
+                            origRange[1] + i-1,
+                            origRange[2] + last-1,
+                        },
                         isParentPart = false
                     },
                     hierarchy = { langTree = langTree, children = {} },
