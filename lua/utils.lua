@@ -2,6 +2,8 @@ local destr = table.unpack or unpack
 
 local M = {}
 
+M.unpack = destr
+
 function M.isRangeEmpty(range)
     return range[1] > range[3] or (range[1] == range[3] and range[2] > range[4])
 end
@@ -116,6 +118,13 @@ end
 function M.getRootNode(buf)
     local root = vim.treesitter.get_parser(buf)
     return root:parse()[1]:root() -- ????
+end
+
+function M.vim_clamp0(value) --           why??  v   nvim_buf_get_text doesn't like int max ...
+    return math.max(math.min(value, 2147483647 - 1), 0)
+end
+function M.vim_clamp1(value)
+    return math.max(math.min(value, 2147483647), 1)
 end
 
 function M.assert2(cond, errMsg)

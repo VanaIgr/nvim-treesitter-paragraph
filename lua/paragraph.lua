@@ -277,101 +277,156 @@ end
 
 local m = require('mapping')
 
+local Properties = {}
 
+function Properties:parseNode(context, treesNode)
+    local hierarchy = require('hierarchy.default')
+    local type = hierarchy.treesType(treesNode, context.langTree)
+    local config = self.config[type.lang] or {}
 
-local properties = {
-    parseNode = function(self, context, treesNode)
-        --if true then return false end
-        local hierarchy = require('hierarchy.default')
-
-        local nodeType = hierarchy.treesType(treesNode, context.langTree)
-
-        if nodeType.name == ',' or nodeType.name == ';' then
-            local node = hierarchy.createNode(treesNode, context.langTree, context.static)
-            table.insert(context.siblings, node)
-            node.info.isParentPart = false
-            return true
-        end
-
-        if nodeType.lang == 'cpp' then
-            if nodeType.name == 'expression_statement' then
-                hierarchy.parseSplitNode(treesNode, nodeType, {
-                    splitAt = function(_, node)
-                        local type = node.type
-                        print(type.name)
-                        if type.name == ';' then return true end
-                    end
-                }, context)
-                return true
+    local splitProperties = (config.split or {})[type.name]
+    if splitProperties and hierarchy.parseSplitNode(treesNode, type, {
+            splitAt = function(_, children, i)
+                return splitProperties[children[i].type.name]
             end
-        end
-
-        if nodeType.lang == 'lua' then
-            if nodeType.name == 'else_statement' or nodeType.name == 'elseif_statement' then
-                for child in treesNode:iter_children() do
-                    hierarchy.parseChild(context, child)
-                end
-                return true
+        },
+        context
+    ) then return end
+    local splitExtra = ((config.split or {})[1] or {}).extra
+    if splitExtra and hierarchy.parseSplitNode(treesNode, type, {
+            splitAt = function(_, children, i)
+                local res = splitExtra(type.name, children[i].type.name, i, #children)
+                if res then return true else return false end -- convert to bool
             end
+        },
+        context
+    ) then return end
 
-            if nodeType.name == 'function_declaration' then
-                local node = hierarchy.createNode(treesNode, context.langTree, context.static)
-                table.insert(context.siblings, node)
-                for _, child in pairs(node.hierarchy.children) do
-                    if child.type.name ~= 'body' then -- TODO: sanity check: assert same language
-                        child.info.isParentPart = true
-                    end
+    local textProperties = (config.text or {})[type.name]
+    if textProperties and hierarchy.parseTextNode(
+        treesNode, type, {
+            boundaryLinesParent = (textProperties[1] or {}).boundary_lines_parent,
+            isText = function(childNode, childContext)
+                if context.langTree == childContext.langTree then
+                    return textProperties[hierarchy.treesType(childNode, context.langTree).name]
                 end
-                return true
             end
+        },
+        context
+    ) then return end
+
+    hierarchy.parseRegularNode(context, treesNode)
+end
+function Properties:setupNode(node)
+    local hierarchy = require('hierarchy.default')
+
+    local type = node.type
+    local parentPartProperties = (self.config[type.lang] or {}).parent_part
+    local parentPartFunction = (parentPartProperties or {})[1]
+
+    if parentPartFunction then
+        local parentType = (node.hierarchy.parent or {}).type
+
+        local function convertType(type)
+            local nodeInfo
+            if type == nil then return { type = 'none' }
+            elseif type[1] == hierarchy.typeId.treesitter then
+                nodeInfo = { type = 'regular', language = type.lang, name = type.name }
+            elseif type[1] == hierarchy.typeId.languageRoot then
+                nodeInfo = {
+                    type = 'language_change',
+                    from_language = (type.fromTree or {}).lang,
+                    to_language = (type.toTree or {}).lang
+                }
+            elseif type[1] == hierarchy.typeId.text then
+                nodeInfo = { type = 'text' }
+            else
+                assert(false, vim.inspect(type))
+            end
+            return nodeInfo
         end
 
-        local textProperties = ({
-            ['comment'] = {
-                --{ boundaryLinesParent = true }, -- [1] ~= ['1'] --c++
-                isText = function(node, context)
-                    local  type = hierarchy.treesType(node, context.langTree)
-                    if type.name == 'comment_content' then return true end -- lua only
-                end
-            },
-            ['string_fragment'] = {
-                isText = function(node, context)
-                    local  type = hierarchy.treesType(node, context.langTree)
-                    if type.name == 'string' then return true end
-                end
-            },
-            ['string_literal'] = {
-                isText = function(node, context)
-                    local  type = hierarchy.treesType(node, context.langTree)
-                    if type.name == 'string_content' then return true end
-                end
-            },
-            ['template_string'] = {},
-        })[nodeType.name]
-        if textProperties then
-            hierarchy.parseTextNode(treesNode, nodeType, textProperties, context)
-            return true
-        end
-
-        if nodeType.lang ~= 'cpp' then return end
-        if nodeType.name == 'if_statement' then
-            hierarchy.parseSplitNode(treesNode, nodeType, {
-                splitAt = function(_, node)
-                    local type = node.type
-                    if type.name == 'else_clause' then return true end
-                end
-            }, context)
-            return true
-        elseif nodeType.name == 'else_clause' then
-            hierarchy.parseSplitNode(treesNode, nodeType, {
-                splitAt = function(_, node)
-                    local type = node.type
-                    if type.name == 'if_statement' then return true end
-                end
-            }, context)
-            return true
-        end
+        node.info.isParentPart = parentPartFunction(convertType(type), convertType(parentType), node.info.isParentPart)
     end
+end
+
+local function createProperties(config)
+    local o = { config = config }
+    setmetatable(o, { __index = Properties })
+    return o
+end
+
+local properties = createProperties{
+    lua = {
+        text = {
+            comment = { comment_content = true },
+            string = { string_content = true },
+        },
+        parent_part = {
+            function(node_type, parent_type, is_parent_part)
+                if node_type.type == 'regular' and (node_type.name == ',' or node_type.name == ';') then
+                    return false
+                end
+
+                if node_type.type == 'regular' and parent_type.type == 'regular'
+                    and parent_type.language == node_type.language
+                    and node_type.name ~= 'body' and parent_type.name == 'function_declaration'
+                then
+                    return true
+                end
+
+                return is_parent_part
+            end
+        },
+    },
+    cpp = {
+        text = {
+            comment = { { boundary_lines_parent = true } },
+            string_literal = { string_content = true },
+            char_literal   = { character = true }, -- probably unnecessary
+            raw_string_literal = { raw_stinr_content = true },
+            system_lib_string = {},
+        },
+        split = {
+            { extra = function(_parentName, childName, childI, childrenC)
+                return childName == ';' and childI == childrenC
+            end },
+            if_statement = { else_clause = true },
+            else_clause = { if_statement = true },
+        },
+        parent_part = {
+            function(node_type, parent_type, is_parent_part)
+                if node_type.type == 'regular' and (node_type.name == ',' or node_type.name == ';') then
+                    return false
+                end
+
+                if node_type.type == 'regular' and parent_type.type == 'regular'
+                    and parent_type.language == node_type.language
+                    and node_type.name ~= 'body' and parent_type.name == 'function_declaration'
+                then
+                    return true
+                end
+
+                return is_parent_part
+            end
+        }
+    },
+    python = {
+        text = { string = { string_content = true } }
+    },
+    javascript = {
+        text = {
+            string = { string_fragment = true },
+            template_string = {},
+        },
+        split = {
+            { extra = function(_parentName, childName, childI, childrenC)
+                return childName == ';' and childI == childrenC
+            end },
+            if_statement = { else_clause = true },
+            else_clause = { if_statement = true },
+        }
+    },
 }
 
 local ns = vim.api.nvim_create_namespace('')
@@ -412,12 +467,6 @@ local function checkIsSafeLine(range, otherPos, rangeBelow)
     else return otherPos[1] > range[3] end
 end
 
-local vimMax = 2147483647
-
-local function clampCol(col)
-    return math.max(0, math.min(col, vimMax - 1))
-end
-
 local function getReginfos(register)
     local reginfos = {}
     local curReg = register
@@ -429,6 +478,8 @@ local function getReginfos(register)
     return reginfos
 end
 
+local fix = utils.vim_clamp0
+
 m.n('yip', function() local bufId = vim.api.nvim_get_current_buf()
     local parser = vim.treesitter.get_parser(bufId)
 
@@ -438,34 +489,27 @@ m.n('yip', function() local bufId = vim.api.nvim_get_current_buf()
     if paragraphData == nil then return end
     local totalRange = paragraphData.range
 
-    --print(vim.inspect(paragraphData))
-
     local prev, next = paragraphData.ends[1].neighbour, paragraphData.ends[2].neighbour
     local lineBefore, lineAfter = checkIsSafeLine(totalRange, prev, true), checkIsSafeLine(totalRange, next, false)
 
-    --print(lineBefore, lineAfter, vim.inspect(prev), vim.inspect(next), vim.inspect(totalRange))
+    local range = { totalRange[1] + 1, nil, totalRange[3] + 1, nil }
+    if lineBefore then range[2] = 0
+    else range[2] = totalRange[2] end
+    if lineAfter then range[4] = math.huge
+    else range[4] = totalRange[4] end
 
-    local firstLine = totalRange[1] + 1
-    local firstCol
-    local lastLine  = totalRange[3] + 1
-    local lastCol
+    -- (1, 0) end-exclusive indexing ... even though half the time these marks are inclusive
+    vim.api.nvim_buf_set_mark(bufId, '[', utils.vim_clamp1(range[1]), utils.vim_clamp0(range[2]), {})
+    vim.api.nvim_buf_set_mark(bufId, ']', utils.vim_clamp1(range[3]), utils.vim_clamp0(range[4]+1), {})
 
-    if lineBefore then firstCol = 0
-    else firstCol = clampCol(totalRange[2]) end
-    if lineAfter then lastCol = vimMax
-    else firstCol = clampCol(totalRange[4]) end
+    totalRange[4] = totalRange[4] + 1
+    totalRange = vim.tbl_map(fix, totalRange)
+    local text = vim.api.nvim_buf_get_text(bufId, totalRange[1], totalRange[2], totalRange[3], totalRange[4], {})
+    text[1] = string.rep(' ', totalRange[2]) .. text[1]
 
     local pos = vim.api.nvim_win_get_cursor(0)
     local register = vim.api.nvim_get_vvar('register')
     local reginfos = getReginfos(register)
-
-    vim.api.nvim_buf_set_mark(bufId, '[', firstLine, firstCol, {})
-    vim.api.nvim_buf_set_mark(bufId, ']', lastLine, lastCol, {})
-
-    local text = vim.api.nvim_buf_get_text(bufId, totalRange[1], totalRange[2], totalRange[3], totalRange[4]+1, {})
-    text[1] = string.rep(' ', totalRange[2]) .. text[1]
-
-    --print(vim.inspect(vim.fn.getpos("'[")), firstCol)
 
     vim.cmd('normal! "'..register..'`[y`]')
     vim.api.nvim_win_set_cursor(0, pos)
@@ -492,25 +536,9 @@ m.n('dip', function()
     local totalRange = paragraphData.range
     local ends = paragraphData.ends
 
-    --print(vim.inspect(paragraphData))
-
- --[[local emptyAbove, emptyBelow
- if ends[1].neighbour then emptyAbove = totalRange[1] - ends[1].neighbour[1] - 1
- else emptyAbove = totalRange[1] end
- if ends[2].neighbour then emptyBelow = ends[2].neighbour[1] - totalRange[3] - 1
- else emptyBelow = vim.api.nvim_buf_line_count(bufId) - totalRange[3] - 1 end
-
-]]
-
---local lineBefore, lineAfter = checkIsSafeLine(totalRange, prev, true), checkIsSafeLine(totalRange, next, false)
-
     local prev, next = paragraphData.ends[1].neighbour, paragraphData.ends[2].neighbour
     if not prev then prev = { -1, math.huge } end
     if not next then next = { vim.api.nvim_buf_line_count(bufId), 0 } end
-    --if prev then lastPrev = prev[1]
-    --else lastPrev = -1 end
-    --if next then firstNext = next[1]
-    --else firstNext = vim.api.nvim_buf_line_count(bufId) end
     local lastPrev, firstNext = prev[1], next[1]
     local diffBef = totalRange[1] - lastPrev - 1
     local diffAft = firstNext - totalRange[3] - 1
@@ -531,8 +559,15 @@ m.n('dip', function()
             firstC = totalRange[2]
             lastC = next[2]
         end
-    elseif (ends[1].smaler and ends[2].smaler) or (not ends[1].smaler and not ends[2].smaler) then
-        if diffBef < diffAft then
+    else
+        local useFirst
+        if (ends[1].smaler and ends[2].smaler) or (not ends[1].smaler and not ends[2].smaler) then
+            useFirst = diffBef < diffAft
+        else
+            useFirst = ends[1].smaler
+        end
+
+        if useFirst then
             firstL = prev[1]
             firstC = prev[2] + 1
             lastL  = totalRange[3]
@@ -543,27 +578,21 @@ m.n('dip', function()
             lastL  = next[1]
             lastC  = next[2]
         end
-    elseif ends[1].smaler then
-        firstL = prev[1]
-        firstC = prev[2] + 1
-        lastL  = totalRange[3]
-        lastC  = totalRange[4] + 1
-    elseif ends[2].smaler then
-        firstL = totalRange[1]
-        firstC = totalRange[2]
-        lastL  = next[1]
-        lastC  = next[2]
     end
 
-    local cursorPosMark = vim.api.nvim_buf_set_extmark(bufId, ns, ends[1].neighbour[1], ends[1].neighbour[2] + 1, {})
+    local cursorPosMark = vim.api.nvim_buf_set_extmark(
+        bufId, ns, fix(ends[1].neighbour[1]), fix(ends[1].neighbour[2] + 1), {}
+    )
 
     local register = vim.api.nvim_get_vvar('register')
     local reginfos = getReginfos(register)
 
-    vim.api.nvim_buf_set_mark(bufId, '[', firstL+1, firstC, {})
-    vim.api.nvim_buf_set_mark(bufId, ']', lastL +1, lastC, {})
+    vim.api.nvim_buf_set_mark(bufId, '[', utils.vim_clamp1(firstL+1), utils.vim_clamp0(firstC), {})
+    vim.api.nvim_buf_set_mark(bufId, ']', utils.vim_clamp1(lastL +1), utils.vim_clamp0(lastC+1), {})
 
-    local text = vim.api.nvim_buf_get_text(bufId, totalRange[1], totalRange[2], totalRange[3], totalRange[4]+1, {})
+    totalRange[4] = totalRange[4] + 1
+    totalRange = vim.tbl_map(fix, totalRange)
+    local text = vim.api.nvim_buf_get_text(bufId, totalRange[1], totalRange[2], totalRange[3], totalRange[4], {})
     text[1] = string.rep(' ', totalRange[2]) .. text[1]
     if addEndLine then table.insert(text, '') end
 

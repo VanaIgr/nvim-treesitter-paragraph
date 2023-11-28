@@ -4,8 +4,7 @@ local vim = vim
 local M = {}
 
 local typeId = {
-    treesitter = -1,
-    custom = 0,
+    treesitter = 0,
     languageRoot = 1,
     text = 2,
 }
@@ -68,6 +67,7 @@ function M.fixChildren(parentNode)
         h.parent = parentNode
         h.prev   = children[i-1]
         h.next   = children[i+1]
+        parentNode.static.properties:setupNode(child)
     end
 end
 
@@ -76,7 +76,7 @@ function M.nodeContext(node)
 end
 
 function M.treesType(node, langTree)
-    return { typeId.treeSitter, lang = langTree:lang(), name = node:type() }
+    return { typeId.treesitter, lang = langTree:lang(), name = node:type() } -- TODO: add rest of node's properties
 end
 
 function M.treesNodeRange(treesNode)
@@ -111,53 +111,53 @@ function M.createNode(treesNode, langTree, static)
     setmetatable(hierarchy, M.lazyChildren(node))
     node.hierarchy = hierarchy
 
+    node.static.properties:setupNode(node)
+
     return node
 end
 
+function M.parseRegularNode(context, treesNode)
+    table.insert(context.siblings, M.createNode(treesNode, context.langTree, context.static))
+end
+
 function M.parseSplitNode(treesNode, nodeType, params, context)
-    local startNode = {
-        type = nodeType,
-        info = { isParentPart = not treesNode:named() },
-        hierarchy = { langTree = context.langTree, children = {} },
-        orig = treesNode,
-        static = context.static
-    }
     local newContext = { siblings = {}, langTree = context.langTree, static = context.static }
 
-    for child in treesNode:iter_children() do
-        M.parseChild(newContext, child)
-    end
+    for child in treesNode:iter_children() do M.parseChild(newContext, child) end
+    if #newContext.siblings == 0 then return false end
 
-    if #newContext.siblings == 0 then
-        startNode.info.range = M.treesNodeRange(treesNode)
-        table.insert(context.siblings, startNode)
-    end
+    local startNodeChildren = {}
 
     local children = newContext.siblings
-    local childI = #children+1
+    local childI
     for i=1, #children do
-        if params:splitAt(children[i]) then
+        local child = children[i]
+        if params:splitAt(children, i) then
             childI = i
             break
         else
-            table.insert(startNode.hierarchy.children, children[i])
-            if type(params.setup) == 'function' then params:setup(children[i], false) end
+            table.insert(startNodeChildren, child)
         end
     end
 
-    local c = startNode.hierarchy.children
-    if #c ~= 0 then
-        local fr = c[1].info.range
-        local lr = c[#c].info.range
-        startNode.info.range = { fr[1], fr[2], lr[3], lr[4] }
+    if not childI then return false end
+    if #startNodeChildren ~= 0 then
+        local fr = startNodeChildren[1].info.range
+        local lr = startNodeChildren[#startNodeChildren].info.range
+        local startNode = {
+            type = nodeType,
+            info = { isParentPart = not treesNode:named(), range = { fr[1], fr[2], lr[3], lr[4] } },
+            hierarchy = { langTree = context.langTree, children = startNodeChildren },
+            orig = treesNode, static = context.static
+        }
         M.fixChildren(startNode)
+        startNode.static.properties:setupNode(startNode)
         table.insert(context.siblings, startNode)
     end
 
-    for i=childI, #children do
-        if type(params.setup) == 'function' then params:setup(children[i], true) end
-        table.insert(context.siblings, children[i])
-    end
+    for i=childI, #children do table.insert(context.siblings, children[i]) end
+
+    return true
 end
 
 function M.parseTextNode(treeNode, nodeType, textProperties, context)
@@ -213,7 +213,7 @@ function M.parseTextNode(treeNode, nodeType, textProperties, context)
             local last  = line:reverse():find('%S') -- findlast
             if first ~= nil and last ~= nil then
                 last = #line - last + 1
-                table.insert(children, {
+                local child = {
                     type = { typeId.text },
                     info = {
                         range = {
@@ -226,7 +226,9 @@ function M.parseTextNode(treeNode, nodeType, textProperties, context)
                     },
                     hierarchy = { langTree = langTree, children = {} },
                     static = static
-                })
+                }
+                child.static.properties:setupNode(child)
+                table.insert(children, child)
             end
         end
     end
@@ -246,14 +248,17 @@ function M.parseTextNode(treeNode, nodeType, textProperties, context)
     end
     textToNodes(prevLine, prevCol, nodeRange[3], nodeRange[4])
 
-    if boundaryLinesParent and #children ~= 0 then
+    if #children == 0 then return false end
+
+    if boundaryLinesParent then
         children[1].info.isParentPart = true
         children[#children].info.isParentPart = true
     end
 
     M.fixChildren(node)
+    node.static.properties:setupNode(node)
     table.insert(siblings, node)
-    return
+    return true
 end
 
 local function findSubtreeForNode(tree, nodeRange)
@@ -289,15 +294,16 @@ function M.parseChild(context, treesNode)
         }
         M.parseChild(M.nodeContext(parent), root)
         M.fixChildren(parent)
+        parent.static.properties:setupNode(parent)
         table.insert(siblings, parent)
         return
     end
 
-    if properties:parseNode(context, treesNode) then return end
-
-    table.insert(siblings, M.createNode(treesNode, langTree, static))
+    properties:parseNode(context, treesNode)
 end
 
+-- properties = { function parseNode, function setupNode }
+-- both functions can be called on nodes that don't end up in the final tree
 M.createRoot = function(source, langTree, properties)
     local root = langTree:parse()[1]:root()
     local idGenerator = M.createIdGenerator()
@@ -309,6 +315,7 @@ M.createRoot = function(source, langTree, properties)
     }
     M.parseChild(M.nodeContext(parent), root)
     M.fixChildren(parent)
+    parent.static.properties:setupNode(parent)
     return parent
 end
 
