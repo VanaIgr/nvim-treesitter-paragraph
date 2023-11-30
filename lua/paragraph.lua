@@ -1,3 +1,13 @@
+local function reset()
+    vim.tbl_map(function(it) package.loaded[it] = nil end, { 'uitls', 'hierarchy.default' })
+    vim.cmd'mes clear'
+    vim.cmd'so'
+    print('a') -- my vim doesn't display the first line in messages buffer
+end
+--[[
+vim.keymap.set('n', '+', reset)
+]]
+
 local utils = require('utils')
 
 
@@ -23,7 +33,13 @@ local function fillLeafNodesInRange(list, nodesInfo, node, range, depth)
 
     if not hasChildren or status == 2 then
         if nodesInfo:parentPart(node) then return 2
-        else list[nodesInfo:id(node)] = node end
+        else
+            local userdata = nodesInfo:data(node)
+            if not userdata.filled then
+                table.insert(list, node)
+                userdata.filled = true
+            end
+        end
     end
 end
 
@@ -100,7 +116,6 @@ local function printTree(indent, node)
     end
 end
 
-
 local function findParagraphBounds(nodesInfo, root, inputRange)
     local rootRange = nodesInfo:range(root)
     local initialNodes = {}
@@ -109,7 +124,9 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
     --for _, n in pairs(initialNodes) do print(vim.inspect(n.info.range), n.orig) end
 
     local initParents = {}
-    for _, node in pairs(initialNodes) do -- find all parents of nodes in range and keep 2 boundary nodes for each parent
+    for _, node in ipairs(initialNodes) do -- find all parents of nodes in range and keep 2 boundary nodes for each parent
+        nodesInfo:data(node).filled = nil
+
         local nodeRange = nodesInfo:range(node)
 
         local parent = nodesInfo:parent(node)
@@ -117,14 +134,14 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
             range = nodeRange,
             ends = { { reachedParent = true, smaler = true }, { reachedParent = true, smaler = true } },
         } end -- if root node is already selected
-        local parentId = nodesInfo:id(parent)
 
-        local parentData = initParents[parentId]
-        if parentData == nil then
-            parentData = { startNodes = { node, node } }
-            initParents[parentId] = parentData
+        local parentUserdata = nodesInfo:data(parent)
+        local parentData = parentUserdata.selected
+        if not parentData then
+            local selected = { startNodes = { node, node }, parent = parent }
+            table.insert(initParents, selected)
+            parentUserdata.selected = selected
         else
-
             local combinedRange = getTwoNodesRange(nodesInfo, parentData.startNodes)
             if utils.isPointBefore(nodeRange[1], nodeRange[2], combinedRange[1], combinedRange[2]) then
                 parentData.startNodes[1] = node
@@ -132,13 +149,14 @@ local function findParagraphBounds(nodesInfo, root, inputRange)
             if utils.isPointBefore(combinedRange[3], combinedRange[4], nodeRange[3], nodeRange[4]) then
                 parentData.startNodes[2] = node
             end
-
         end
 
     end
 
     local parentsData = {}
-    for _, parentData in pairs(initParents) do -- convert parent map to array and add add necessary values
+    for _, parentData in ipairs(initParents) do -- convert parent map to array and add add necessary values
+        nodesInfo:data(parentData.parent).selected = nil
+
         while true do -- expand the selection for each parent to be complete
             local first = expandWholeLine(nodesInfo, parentData.startNodes[1], false)
             if first ~= nil then
@@ -275,88 +293,7 @@ local function getCursorRange()
     return { line, 0, line, math.huge }
 end
 
-local m = require('mapping')
-
-local Properties = {}
-
-function Properties:parseNode(context, treesNode)
-    local hierarchy = require('hierarchy.default')
-    local type = hierarchy.treesType(treesNode, context.langTree)
-    local config = self.config[type.lang] or {}
-
-    local splitProperties = (config.split or {})[type.name]
-    if splitProperties and hierarchy.parseSplitNode(treesNode, type, {
-            splitAt = function(_, children, i)
-                return splitProperties[children[i].type.name]
-            end
-        },
-        context
-    ) then return end
-    local splitExtra = ((config.split or {})[1] or {}).extra
-    if splitExtra and hierarchy.parseSplitNode(treesNode, type, {
-            splitAt = function(_, children, i)
-                local res = splitExtra(type.name, children[i].type.name, i, #children)
-                if res then return true else return false end -- convert to bool
-            end
-        },
-        context
-    ) then return end
-
-    local textProperties = (config.text or {})[type.name]
-    if textProperties and hierarchy.parseTextNode(
-        treesNode, type, {
-            boundaryLinesParent = (textProperties[1] or {}).boundary_lines_parent,
-            isText = function(childNode, childContext)
-                if context.langTree == childContext.langTree then
-                    return textProperties[hierarchy.treesType(childNode, context.langTree).name]
-                end
-            end
-        },
-        context
-    ) then return end
-
-    hierarchy.parseRegularNode(context, treesNode)
-end
-function Properties:setupNode(node)
-    local hierarchy = require('hierarchy.default')
-
-    local type = node.type
-    local parentPartProperties = (self.config[type.lang] or {}).parent_part
-    local parentPartFunction = (parentPartProperties or {})[1]
-
-    if parentPartFunction then
-        local parentType = (node.hierarchy.parent or {}).type
-
-        local function convertType(type)
-            local nodeInfo
-            if type == nil then return { type = 'none' }
-            elseif type[1] == hierarchy.typeId.treesitter then
-                nodeInfo = { type = 'regular', language = type.lang, name = type.name }
-            elseif type[1] == hierarchy.typeId.languageRoot then
-                nodeInfo = {
-                    type = 'language_change',
-                    from_language = (type.fromTree or {}).lang,
-                    to_language = (type.toTree or {}).lang
-                }
-            elseif type[1] == hierarchy.typeId.text then
-                nodeInfo = { type = 'text' }
-            else
-                assert(false, vim.inspect(type))
-            end
-            return nodeInfo
-        end
-
-        node.info.isParentPart = parentPartFunction(convertType(type), convertType(parentType), node.info.isParentPart)
-    end
-end
-
-local function createProperties(config)
-    local o = { config = config }
-    setmetatable(o, { __index = Properties })
-    return o
-end
-
-local properties = createProperties{
+local config = {
     lua = {
         text = {
             comment = { comment_content = true },
@@ -480,11 +417,11 @@ end
 
 local fix = utils.vim_clamp0
 
-m.n('yip', function() local bufId = vim.api.nvim_get_current_buf()
+vim.keymap.set('n', 'yip', function() local bufId = vim.api.nvim_get_current_buf()
     local parser = vim.treesitter.get_parser(bufId)
 
-    local a = require('hierarchy.default')
-    local root = a.createRoot(bufId, parser, properties)
+
+    local root = require('hierarchy.default').createRoot(bufId, parser, config)
     local paragraphData = findParagraphBounds(createNodesInfo(), root, getCursorRange())
     if paragraphData == nil then return end
     local totalRange = paragraphData.range
@@ -522,14 +459,13 @@ m.n('yip', function() local bufId = vim.api.nvim_get_current_buf()
     end
 end)
 
-m.n('dip', function()
+vim.keymap.set('n', 'dip', function()
     local addEndLine = false
 
     local bufId = vim.api.nvim_get_current_buf()
     local parser = vim.treesitter.get_parser(bufId)
 
-    local a = require('hierarchy.default')
-    local root = a.createRoot(bufId, parser, properties)
+    local root = require('hierarchy.default').createRoot(bufId, parser, config)
 
     local paragraphData = findParagraphBounds(createNodesInfo(), root, getCursorRange())
     if paragraphData == nil then return end
