@@ -1,11 +1,13 @@
+--[[
+
 local function reset()
     vim.tbl_map(function(it) package.loaded[it] = nil end, { 'uitls', 'hierarchy.default' })
     vim.cmd'mes clear'
     vim.cmd'so'
     print('a') -- my vim doesn't display the first line in messages buffer
 end
---[[
 vim.keymap.set('n', '+', reset)
+
 ]]
 
 local utils = require('utils')
@@ -417,11 +419,20 @@ end
 
 local fix = utils.vim_clamp0
 
-vim.keymap.set('n', 'yip', function() local bufId = vim.api.nvim_get_current_buf()
-    local parser = vim.treesitter.get_parser(bufId)
+local function getRoot(bufId)
+    local ok, parser = pcall(vim.treesitter.get_parser, bufId)
+    if ok then
+        return require('hierarchy.default').createRoot(bufId, parser, config)
+    else
+        local lines = vim.api.nvim_buf_get_lines(bufId, 0, vim.api.nvim_buf_line_count(bufId), false)
+        return require('hierarchy.default').createTextRoot(lines, config)
+    end
+end
 
+vim.keymap.set('n', 'yip', function()
+    local bufId = vim.api.nvim_get_current_buf()
+    local root = getRoot(bufId)
 
-    local root = require('hierarchy.default').createRoot(bufId, parser, config)
     local paragraphData = findParagraphBounds(createNodesInfo(), root, getCursorRange())
     if paragraphData == nil then return end
     local totalRange = paragraphData.range
@@ -463,9 +474,7 @@ vim.keymap.set('n', 'dip', function()
     local addEndLine = false
 
     local bufId = vim.api.nvim_get_current_buf()
-    local parser = vim.treesitter.get_parser(bufId)
-
-    local root = require('hierarchy.default').createRoot(bufId, parser, config)
+    local root = getRoot(bufId)
 
     local paragraphData = findParagraphBounds(createNodesInfo(), root, getCursorRange())
     if paragraphData == nil then return end

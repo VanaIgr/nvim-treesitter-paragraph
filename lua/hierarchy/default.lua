@@ -190,6 +190,40 @@ function Node:parseSplitNode(treesNode, params)
     return true
 end
 
+function Node:createTextNode()
+    local node = self:updateNode{
+        type = { defaultTypes.text },
+        info = { range = { 0, 0, #self.source-1, math.huge }, isParentPart = false },
+        hierarchy = { children = {} },
+    }
+
+    local lines = self.source
+    if #lines == 0 then return node end
+
+    for i, line in ipairs(lines) do
+        local first = line:find('%S')
+        local last  = line:reverse():find('%S') -- findlast
+        if first ~= nil and last ~= nil then
+            last = #line - last + 1
+            local child = self:updateNode{
+                type = { defaultTypes.text },
+                info = {
+                    range = { i-1, first-1, i-1, last-1 },
+                    isParentPart = false
+                },
+                hierarchy = { children = {} },
+            }
+            child:setup()
+            table.insert(node.hierarchy.children, child)
+        end
+    end
+
+    node:fixChildren()
+    node:setup()
+
+    return node
+end
+
 function Node:parseTextNode(treesNode, textProperties)
     local node = self:createNode(treesNode)
     node.info.range = { utils.fixedRange(treesNode:range()) }
@@ -225,7 +259,7 @@ function Node:parseTextNode(treesNode, textProperties)
         for i=startL,endL do
             table.insert(curLines, lines[i+1])
         end
-        utils.assert2(#curLines ~= 0, function() return 'incorrect range '..vim.inspect(origRange)..' for text node '..nodeType..' at '..vim.inspect(nodeRange) end)
+        utils.assert2(#curLines ~= 0, function() return 'incorrect range '..vim.inspect(origRange)..' for text node '..treesNode..' at '..vim.inspect(nodeRange) end)
         curLines[#curLines] = curLines[#curLines]:sub(1, endC+1)
         curLines[1] = curLines[1]:sub(startC+1)
 
@@ -281,7 +315,7 @@ function Node:parseTextNode(treesNode, textProperties)
 
     node.hierarchy.children = children
     node:fixChildren()
-    self:setup()
+    node:setup()
     table.insert(self.hierarchy.children, node)
 
     return true
@@ -351,6 +385,13 @@ M.createRoot = function(source, langTree, config)
     local hierarchy = { langTree = nil, source = source, config = config }
     setmetatable(hierarchy, { __index = Node })
     return hierarchy:createLangRootNode(langTree, 1)
+end
+
+--- @param source string[]
+function M.createTextRoot(source, config)
+    local hierarchy = { langTree = nil, source = source, config = config }
+    setmetatable(hierarchy, { __index = Node })
+    return hierarchy:createTextNode()
 end
 
 return M
