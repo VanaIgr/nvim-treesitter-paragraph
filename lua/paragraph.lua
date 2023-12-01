@@ -429,6 +429,22 @@ local function getRoot(bufId)
     end
 end
 
+local function normalizePosition(bufId, line, col)
+    if line < 0 then
+        line = 0
+        col = 0
+    end
+    local lineCount = vim.api.nvim_buf_line_count(bufId)
+    if line >= lineCount then
+        line = lineCount - 1
+        col = math.huge
+    end
+
+    col = math.max(0, math.min(col, #vim.api.nvim_buf_get_lines(bufId, line, line+1, true)[1] - 1))
+
+    return line, col
+end
+
 vim.keymap.set('n', 'yip', function()
     local bufId = vim.api.nvim_get_current_buf()
     local root = getRoot(bufId)
@@ -440,15 +456,17 @@ vim.keymap.set('n', 'yip', function()
     local prev, next = paragraphData.ends[1].neighbour, paragraphData.ends[2].neighbour
     local lineBefore, lineAfter = checkIsSafeLine(totalRange, prev, true), checkIsSafeLine(totalRange, next, false)
 
-    local range = { totalRange[1] + 1, nil, totalRange[3] + 1, nil }
-    if lineBefore then range[2] = 0
-    else range[2] = totalRange[2] end
-    if lineAfter then range[4] = math.huge
-    else range[4] = totalRange[4] end
+    local startL, startC = totalRange[1]
+    local lastL, lastC = totalRange[3]
+    if lineBefore then startC = 0
+    else startC = totalRange[2] end
+    if lineAfter then lastC = math.huge
+    else lastC = totalRange[4] end
 
-    -- (1, 0) end-exclusive indexing ... even though half the time these marks are inclusive
-    vim.api.nvim_buf_set_mark(bufId, '[', utils.vim_clamp1(range[1]), utils.vim_clamp0(range[2]), {})
-    vim.api.nvim_buf_set_mark(bufId, ']', utils.vim_clamp1(range[3]), utils.vim_clamp0(range[4]+1), {})
+    startL, startC = normalizePosition(bufId, startL, startC)
+    lastL, lastC = normalizePosition(bufId, lastL, lastC)
+    vim.api.nvim_buf_set_mark(bufId, '[', startL+1, startC, {})
+    vim.api.nvim_buf_set_mark(bufId, ']', lastL+1, lastC+1, {})
 
     totalRange[4] = totalRange[4] + 1
     totalRange = vim.tbl_map(fix, totalRange)
@@ -525,15 +543,16 @@ vim.keymap.set('n', 'dip', function()
         end
     end
 
-    local cursorPosMark = vim.api.nvim_buf_set_extmark(
-        bufId, ns, fix(ends[1].neighbour[1]), fix(ends[1].neighbour[2] + 1), {}
-    )
+    local cursorStartL, cursorStartC = normalizePosition(bufId, prev[1], prev[2])
+    local cursorPosMark = vim.api.nvim_buf_set_extmark(bufId, ns, cursorStartL, cursorStartC, {})
 
     local register = vim.api.nvim_get_vvar('register')
     local reginfos = getReginfos(register)
 
-    vim.api.nvim_buf_set_mark(bufId, '[', utils.vim_clamp1(firstL+1), utils.vim_clamp0(firstC), {})
-    vim.api.nvim_buf_set_mark(bufId, ']', utils.vim_clamp1(lastL +1), utils.vim_clamp0(lastC+1), {})
+    local startL, startC = normalizePosition(bufId, firstL, firstC)
+    local lastL, lastC = normalizePosition(bufId, lastL, lastC)
+    vim.api.nvim_buf_set_mark(bufId, '[', startL+1, startC, {})
+    vim.api.nvim_buf_set_mark(bufId, ']', lastL+1, lastC+1, {})
 
     totalRange[4] = totalRange[4] + 1
     totalRange = vim.tbl_map(fix, totalRange)
@@ -552,5 +571,6 @@ vim.keymap.set('n', 'dip', function()
 
     local cursorPos = vim.api.nvim_buf_get_extmark_by_id(bufId, ns, cursorPosMark, {})
     vim.api.nvim_buf_del_extmark(bufId, ns, cursorPosMark)
-    vim.api.nvim_win_set_cursor(0, { cursorPos[1] + 1, cursorPos[2] })
+    -- extmark somehow manages to be outside of file boundaries sometimes ...
+    pcall(vim.api.nvim_win_set_cursor, 0, { cursorPos[1] + 1, cursorPos[2] })
 end)
